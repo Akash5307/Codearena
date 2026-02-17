@@ -1,0 +1,2 @@
+-- Flyway baseline migration
+-- Actual tables will be created in subsequent versioned migrations (V1, V2, etc.)
