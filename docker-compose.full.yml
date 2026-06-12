@@ -1,3 +1,9 @@
+# Single-file stack: infra + backend (API + judge) + frontend, all in Docker.
+#
+#   docker compose -f docker-compose.full.yml up --build
+#
+# Then open http://localhost:3000  (frontend, which proxies /api to the API).
+# The first run builds the Gradle and Vite images and may take a few minutes.
 services:
   postgres:
     image: postgres:16-alpine
@@ -110,13 +116,27 @@ services:
       MINIO_URL: http://minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
+      # Sandbox scratch dir — must be the SAME absolute path on host and in this
+      # container, because sandbox bind mounts are resolved by the HOST daemon.
+      JUDGE_WORK_DIR: /tmp/codearena-judge
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/codearena-judge:/tmp/codearena-judge
     depends_on:
       rabbitmq:
         condition: service_healthy
       minio:
         condition: service_healthy
+
+  codearena-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: codearena-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - codearena-api
 
 volumes:
   postgres_data:

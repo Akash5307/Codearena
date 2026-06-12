@@ -48,6 +48,7 @@ public class ContestService {
         this.userRepository = userRepository;
     }
 
+    @Transactional(readOnly = true)
     public Page<ContestListResponse> listContests(String status, Pageable pageable) {
         LocalDateTime now = LocalDateTime.now();
         Page<Contest> page;
@@ -65,6 +66,7 @@ public class ContestService {
         return page.map(ContestListResponse::from);
     }
 
+    @Transactional(readOnly = true)
     public ContestDetailResponse getContestBySlug(String slug) {
         Contest contest = contestRepository.findBySlug(slug)
                 .orElseThrow(() -> new ResourceNotFoundException("Contest", "slug", slug));

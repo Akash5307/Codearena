@@ -19,6 +19,17 @@ Thumbs.db
 .env
 *.env.local
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Generated knowledge graph (graphify)
+graphify-out/
+
+# Personal notes (intentionally untracked)
 Working.md
 Resume.md
 Interview.md

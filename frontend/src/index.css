@@ -1,0 +1,79 @@
+@import "katex/dist/katex.min.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-white text-[13px] text-gray-900 font-sans;
+  }
+  a {
+    @apply text-cf-blue hover:underline;
+  }
+}
+
+@layer components {
+  /* Codeforces-style boxed panel */
+  .cf-panel {
+    @apply border border-cf-border bg-white;
+  }
+  .cf-panel-title {
+    @apply bg-cf-band px-3 py-2 text-[14px] font-bold border-b border-cf-border;
+  }
+  /* Data table, CF "datatable" look */
+  .cf-table {
+    @apply w-full border-collapse text-[13px];
+  }
+  .cf-table th {
+    @apply bg-cf-band border border-cf-border px-3 py-1.5 text-left font-bold;
+  }
+  .cf-table td {
+    @apply border border-cf-border px-3 py-1.5;
+  }
+  .cf-table tbody tr:nth-child(even) {
+    @apply bg-cf-panel;
+  }
+  .cf-btn {
+    @apply inline-flex items-center justify-center rounded-sm border border-cf-border
+      bg-gradient-to-b from-white to-gray-100 px-3 py-1 font-bold text-gray-800
+      hover:from-gray-50 hover:to-gray-200 active:translate-y-px disabled:opacity-50
+      disabled:cursor-not-allowed;
+  }
+  .cf-btn-primary {
+    @apply border-cf-blue bg-gradient-to-b from-[#5b7bbf] to-cf-blue text-white
+      hover:from-cf-blue hover:to-[#2d4373];
+  }
+  .cf-input {
+    @apply w-full rounded-sm border border-cf-border px-2 py-1 text-[13px]
+      focus:border-cf-blue focus:outline-none;
+  }
+  .cf-label {
+    @apply mb-1 block font-bold text-gray-700;
+  }
+}
+
+/* Tighten markdown statement rendering */
+.statement h1,
+.statement h2,
+.statement h3 {
+  @apply font-bold my-2;
+}
+.statement p {
+  @apply my-2 leading-relaxed;
+}
+.statement ul {
+  @apply list-disc pl-6 my-2;
+}
+.statement ol {
+  @apply list-decimal pl-6 my-2;
+}
+.statement pre {
+  @apply bg-cf-panel border border-cf-border p-2 my-2 overflow-x-auto font-mono text-[12px];
+}
+.statement code {
+  @apply font-mono bg-cf-panel px-1 rounded-sm;
+}
+.statement pre code {
+  @apply bg-transparent p-0;
+}

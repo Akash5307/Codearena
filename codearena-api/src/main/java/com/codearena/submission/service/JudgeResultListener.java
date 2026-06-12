@@ -26,6 +26,18 @@ public class JudgeResultListener {
     @RabbitListener(queues = RabbitMQConfig.RESULT_QUEUE)
     @Transactional
     public void onJudgeResult(JudgeResult result) {
+        // Progress signal, not a final verdict: flip PENDING -> JUDGING and stop.
+        // Guarded so a late/redelivered JUDGING can never regress a final verdict.
+        if ("JUDGING".equals(result.verdict())) {
+            submissionRepository.findById(result.submissionId()).ifPresent(submission -> {
+                if (submission.getVerdict() == Submission.Verdict.PENDING) {
+                    submission.setVerdict(Submission.Verdict.JUDGING);
+                    submissionRepository.save(submission);
+                }
+            });
+            return;
+        }
+
         submissionRepository.findById(result.submissionId()).ifPresent(submission -> {
             submission.setVerdict(Submission.Verdict.valueOf(result.verdict()));
             submission.setTimeUsedMs(result.timeUsedMs());

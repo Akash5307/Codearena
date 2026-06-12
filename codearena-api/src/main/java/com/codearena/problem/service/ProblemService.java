@@ -51,6 +51,7 @@ public class ProblemService {
         this.minioService = minioService;
     }
 
+    @Transactional(readOnly = true)
     public Page<ProblemListResponse> listProblems(String title, String difficulty, String tagName, Pageable pageable) {
         Problem.Difficulty diff = null;
         if (difficulty != null && !difficulty.isBlank()) {
@@ -65,6 +66,8 @@ public class ProblemService {
         ).map(ProblemListResponse::from);
     }
 
+    // readOnly tx keeps the session open while DTO mappers walk lazy associations (author, tags)
+    @Transactional(readOnly = true)
     @Cacheable(value = "problemDetail", key = "#slug")
     public ProblemDetailResponse getProblemBySlug(String slug) {
         Problem problem = problemRepository.findBySlug(slug)
@@ -75,6 +78,24 @@ public class ProblemService {
                 .map(TestCaseResponse::from)
                 .toList();
         return ProblemDetailResponse.from(problem, sampleCases);
+    }
+
+    // Inlines the actual input/output text of a problem's SAMPLE test cases (only).
+    // Hidden test cases are never exposed here — this is what makes sample I/O
+    // displayable on the problem page without leaking the judging data.
+    @Transactional(readOnly = true)
+    public List<SampleTestCaseResponse> getSampleTestCases(String slug) {
+        Problem problem = problemRepository.findBySlug(slug)
+                .orElseThrow(() -> new ResourceNotFoundException("Problem", "slug", slug));
+        return testCaseRepository
+                .findByProblemIdAndIsSampleTrueOrderByOrderIndex(problem.getId())
+                .stream()
+                .map(tc -> new SampleTestCaseResponse(
+                        tc.getId(),
+                        tc.getOrderIndex(),
+                        minioService.downloadAsString(tc.getInputUrl()),
+                        minioService.downloadAsString(tc.getExpectedOutputUrl())))
+                .toList();
     }
 
     @Transactional
@@ -159,10 +180,14 @@ public class ProblemService {
         Problem problem = problemRepository.findById(problemId)
                 .orElseThrow(() -> new ResourceNotFoundException("Problem", "id", problemId));
 
-        String inputUrl = minioService.uploadFile("testcases/" + problemId, inputFile);
-        String outputUrl = minioService.uploadFile("testcases/" + problemId, outputFile);
-
         int nextIndex = testCaseRepository.findByProblemIdOrderByOrderIndex(problemId).size();
+
+        // Deterministic, sort-stable object keys. The judge worker discovers test cases
+        // by listing this prefix and pairing sorted keys (input before output), so names
+        // must sort by test-case order — random UUIDs here would scramble the pairs.
+        String base = "testcases/" + problemId + "/" + String.format("%05d", nextIndex);
+        String inputUrl = minioService.uploadFileAs(base + "/input.txt", inputFile);
+        String outputUrl = minioService.uploadFileAs(base + "/output.txt", outputFile);
 
         TestCase testCase = new TestCase();
         testCase.setProblem(problem);

@@ -4,6 +4,7 @@ import com.codearena.contest.entity.ContestProblem;
 
 public record ContestProblemResponse(
         Long problemId,
+        String problemSlug,
         String problemTitle,
         String label,
         int orderIndex,
@@ -12,6 +13,7 @@ public record ContestProblemResponse(
     public static ContestProblemResponse from(ContestProblem cp) {
         return new ContestProblemResponse(
                 cp.getProblem().getId(),
+                cp.getProblem().getSlug(),
                 cp.getProblem().getTitle(),
                 cp.getLabel(),
                 cp.getOrderIndex(),

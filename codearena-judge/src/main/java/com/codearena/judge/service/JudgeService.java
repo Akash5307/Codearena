@@ -15,6 +15,7 @@ import io.minio.Result;
 import io.minio.messages.Item;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -36,10 +37,31 @@ public class JudgeService {
     private final MinioClient minioClient;
     private final MinioConfig minioConfig;
 
-    public JudgeService(DockerSandbox sandbox, MinioClient minioClient, MinioConfig minioConfig) {
+    /**
+     * Directory where per-submission sandbox dirs are created. When the judge itself
+     * runs in a container talking to the HOST Docker daemon (docker.sock mount), bind
+     * mount sources are resolved on the HOST filesystem — so this directory must be
+     * bind-mounted into the judge container at the SAME absolute path as on the host
+     * (see docker-compose.full.yml: /tmp/codearena-judge). Empty = system temp dir
+     * (fine when the judge runs directly on the host).
+     */
+    private final String workDir;
+
+    public JudgeService(DockerSandbox sandbox, MinioClient minioClient, MinioConfig minioConfig,
+                        @Value("${judge.work-dir:}") String workDir) {
         this.sandbox = sandbox;
         this.minioClient = minioClient;
         this.minioConfig = minioConfig;
+        this.workDir = workDir;
+    }
+
+    private Path createSandboxDir(Long submissionId) throws IOException {
+        if (workDir == null || workDir.isBlank()) {
+            return Files.createTempDirectory("judge-" + submissionId);
+        }
+        Path base = Path.of(workDir);
+        Files.createDirectories(base);
+        return Files.createTempDirectory(base, "judge-" + submissionId);
     }
 
     public JudgeResult judge(JudgeTask task) {
@@ -50,7 +72,7 @@ public class JudgeService {
 
         Path sandboxDir = null;
         try {
-            sandboxDir = Files.createTempDirectory("judge-" + task.submissionId());
+            sandboxDir = createSandboxDir(task.submissionId());
             Path sourceFile = sandboxDir.resolve(spec.sourceFile());
             Files.writeString(sourceFile, task.sourceCode());
 
@@ -83,23 +105,41 @@ public class JudgeService {
             for (int i = 0; i < testCases.size(); i++) {
                 TestCasePair tc = testCases.get(i);
 
+                // Feed input via a file + shell redirect instead of attaching stdin:
+                // docker-java stdin attach is unreliable (no EOF), which hangs
+                // solutions that read until end-of-input.
+                Files.writeString(sandboxDir.resolve("input.txt"), tc.input());
+                String[] runCmd = {"sh", "-c", String.join(" ", spec.runCmd()) + " < /sandbox/input.txt"};
+
+                // Wall-clock per test (includes ~100-300ms container start overhead,
+                // so this is an upper bound on the solution's own runtime).
+                long runStart = System.nanoTime();
                 ExecutionResult runResult = sandbox.execute(
-                        spec.image(), spec.runCmd(), tc.input(),
+                        spec.image(), runCmd, null,
                         task.timeLimitMs(), memoryBytes, bind);
+                int elapsedMs = (int) ((System.nanoTime() - runStart) / 1_000_000);
+                maxTimeMs = Math.max(maxTimeMs, elapsedMs);
 
                 if (runResult.timedOut()) {
                     return new JudgeResult(task.submissionId(), "TLE",
                             task.timeLimitMs(), null, passed, testCases.size());
                 }
 
+                // Check OOM before the generic exit-code path: an OOM kill exits
+                // nonzero but is a memory-limit breach (MLE), not a runtime error.
+                if (runResult.oomKilled()) {
+                    return new JudgeResult(task.submissionId(), "MLE",
+                            maxTimeMs, task.memoryLimitMb() * 1024, passed, testCases.size());
+                }
+
                 if (runResult.exitCode() != 0) {
                     return new JudgeResult(task.submissionId(), "RE",
-                            null, null, passed, testCases.size());
+                            maxTimeMs, null, passed, testCases.size());
                 }
 
                 if (!compareOutput(runResult.stdout(), tc.expectedOutput())) {
                     return new JudgeResult(task.submissionId(), "WA",
-                            null, null, passed, testCases.size());
+                            maxTimeMs, null, passed, testCases.size());
                 }
 
                 passed++;

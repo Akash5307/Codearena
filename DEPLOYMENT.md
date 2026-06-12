@@ -1,6 +1,6 @@
 # CodeArena — Run & Deployment Guide
 
-Complete guide for running CodeArena locally and deploying the backend to production.
+Complete guide for running CodeArena locally and deploying the full stack (API + judge worker + frontend) to production.
 
 ---
 
@@ -151,17 +151,37 @@ Tests use Mockito and MockMvc — no running infrastructure required.
 
 ### Single-Command Deploy
 
-Deploy the entire stack (infrastructure + application) with one command:
+Deploy the entire stack (infrastructure + API + judge + frontend) with one command:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.full.yml up -d --build
 ```
 
 This will:
-1. Build the API and Judge Worker Docker images (multi-stage builds)
+1. Build the API, Judge Worker, and frontend Docker images (multi-stage builds;
+   backend builds use the `gradle:8.10.2-jdk21-alpine` image so no Gradle
+   distribution download is needed)
 2. Start PostgreSQL, Redis, RabbitMQ, MinIO
 3. Wait for infrastructure health checks to pass
-4. Start the API and Judge Worker
+4. Start the API, Judge Worker, and frontend (nginx on port 3000, reverse-proxying `/api` to the API)
+
+### Judge worker: Docker-out-of-Docker requirements
+
+The judge runs **inside** a container but creates sandbox containers via the
+**host's** Docker daemon (`/var/run/docker.sock` mount). Two consequences:
+
+1. **Shared work dir at identical paths.** Sandbox bind-mount sources are
+   resolved by the *host* daemon, so the judge's scratch dir must exist at the
+   *same absolute path* on host and in the judge container.
+   `docker-compose.full.yml` handles this with
+   `-v /tmp/codearena-judge:/tmp/codearena-judge` + `JUDGE_WORK_DIR=/tmp/codearena-judge`.
+   If you change the path, change both sides identically.
+2. **Root inside the container.** The judge container runs as root because a
+   non-root user cannot access the mounted docker.sock (host docker group GID
+   does not exist inside the container).
+
+When running the judge directly on the host (no container), neither applies —
+leave `JUDGE_WORK_DIR` unset and it uses the system temp dir.
 
 ### Building Images Separately
 
@@ -171,6 +191,9 @@ docker build -t codearena-api:latest -f codearena-api/Dockerfile .
 
 # Build Judge Worker image
 docker build -t codearena-judge:latest -f codearena-judge/Dockerfile .
+
+# Build frontend image
+docker build -t codearena-frontend:latest frontend/
 
 # Run API container
 docker run -d --name codearena-api \
@@ -184,17 +207,20 @@ docker run -d --name codearena-api \
   -e SPRING_PROFILES_ACTIVE=prod \
   codearena-api:latest
 
-# Run Judge Worker container (needs Docker socket)
+# Run Judge Worker container (needs Docker socket + shared work dir, see above)
 docker run -d --name codearena-judge \
   -p 8081:8081 \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /tmp/codearena-judge:/tmp/codearena-judge \
+  -e JUDGE_WORK_DIR=/tmp/codearena-judge \
   -e RABBITMQ_HOST=your-rabbitmq-host \
   -e MINIO_URL=http://your-minio-host:9000 \
   -e SPRING_PROFILES_ACTIVE=prod \
   codearena-judge:latest
-```
 
-**Note:** The Judge Worker requires the Docker socket (`/var/run/docker.sock`) mounted to create sandbox containers for code execution.
+# Run frontend (nginx serves SPA and proxies /api to the codearena-api container)
+docker run -d --name codearena-frontend -p 3000:80 codearena-frontend:latest
+```
 
 ---
 
@@ -236,6 +262,7 @@ docker run -d --name codearena-judge \
 | `MINIO_ACCESS_KEY`   | `minioadmin`         | MinIO access key                 |
 | `MINIO_SECRET_KEY`   | `minioadmin`         | MinIO secret key                 |
 | `MINIO_BUCKET`       | `codearena-testcases`| MinIO bucket name                |
+| `JUDGE_WORK_DIR`     | (system temp)        | Sandbox scratch dir. **Required when the judge runs in Docker** — must be bind-mounted at the same absolute path on host and container |
 
 ---
 
@@ -243,6 +270,7 @@ docker run -d --name codearena-judge \
 
 | Service         | Port  | URL                                       |
 |-----------------|-------|-------------------------------------------|
+| Frontend        | 3000  | http://localhost:3000 (full-stack compose) |
 | API             | 8080  | http://localhost:8080                      |
 | Swagger UI      | 8080  | http://localhost:8080/swagger-ui.html      |
 | API Docs (JSON) | 8080  | http://localhost:8080/api-docs             |
@@ -489,8 +517,10 @@ docker pull yourusername/codearena-judge:latest
 - [ ] Set up database backups for PostgreSQL
 - [ ] Configure log aggregation (ELK, Datadog, CloudWatch)
 - [ ] Set up monitoring and alerting on health endpoints
-- [ ] Ensure the Judge Worker user has Docker socket access
-- [ ] Review and restrict Docker container capabilities for the Judge Worker sandbox
+- [ ] Ensure the Judge Worker has Docker socket access (containerized judge runs as root for this)
+- [ ] Set `JUDGE_WORK_DIR` + matching host bind mount for a containerized judge (see DooD section)
+- [x] Sandbox containers are hardened by default: `--network none`, `--cap-drop ALL`, `no-new-privileges`, `--pids-limit 128`, 1 MB output cap, memory/CPU/time limits
+- [x] Sandbox images are pre-pulled automatically on judge startup (background thread). Pre-pulling on the host beforehand still avoids the very first warm-up delay: `gcc:13`, `eclipse-temurin:21-jdk-alpine`, `python:3.12-slim`, `node:20-slim`, `golang:1.22-alpine`, `rust:1.77-slim`
 
 ---
 
@@ -519,6 +549,25 @@ docker ps
 sudo usermod -aG docker $USER
 # Then log out and back in
 ```
+
+### Every submission fails CE/RE (containerized judge)
+
+Classic Docker-out-of-Docker path mismatch: the sandbox `/sandbox` bind resolves
+against the **host** filesystem. If `JUDGE_WORK_DIR` is unset (or the host bind
+mount is missing / at a different path), the sandbox sees an empty dir and
+compilation fails on every submission.
+
+```bash
+# These two must agree and the volume must be mounted:
+docker inspect codearena-judge --format '{{json .Config.Env}}' | tr ',' '\n' | grep JUDGE_WORK_DIR
+docker inspect codearena-judge --format '{{json .Mounts}}' | python3 -m json.tool | grep -A2 codearena-judge
+```
+
+### Submission stuck on PENDING
+
+The judge is down or still pulling a language image (first submission per
+language pulls it, gcc:13 is ~1.4 GB). Messages are durable — they will be
+judged once the worker is back. Check `docker logs codearena-judge`.
 
 ### Flyway migration fails
 

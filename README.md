@@ -1,13 +1,38 @@
 # CodeArena
 
-Competitive programming platform backend (Codeforces clone) built with Java 21 + Spring Boot 3.3.
+Full-stack competitive programming platform (Codeforces clone): Java 21 + Spring Boot 3.3 backend, React + TypeScript + Tailwind frontend, Docker-sandboxed judge.
 
 ## Prerequisites
 
-- Java 21
-- Docker & Docker Compose
+- Docker & Docker Compose (that's all for the full-stack run)
+- Java 21 + Node 22 only if running services outside Docker
 
-## Quick Start
+## Quick Start (everything in Docker)
+
+```bash
+docker compose -f docker-compose.full.yml up --build
+```
+
+Starts the whole stack: PostgreSQL, Redis, RabbitMQ, MinIO, the API, the judge
+worker, and the frontend. First build takes a few minutes.
+
+| Service     | URL                                            |
+|-------------|------------------------------------------------|
+| Frontend    | http://localhost:3000                          |
+| API         | http://localhost:8080 (Swagger: `/swagger-ui.html`) |
+| Judge       | http://localhost:8081                          |
+| RabbitMQ UI | http://localhost:15672 (guest/guest)           |
+| MinIO console | http://localhost:9001 (minioadmin/minioadmin)|
+
+The frontend's nginx reverse-proxies `/api` to the API container, so the browser
+stays same-origin (the backend has no CORS config — by design).
+
+> Judge note: the worker talks to the **host** Docker daemon via
+> `/var/run/docker.sock` and stages submissions in `/tmp/codearena-judge`, which
+> is bind-mounted at the same absolute path on host and container (sandbox bind
+> mounts are resolved by the host daemon — see `design.md`).
+
+## Dev Mode (services on the host)
 
 ### 1. Start infrastructure services
 
@@ -45,14 +70,26 @@ Runs on port `8081`. Requires Docker daemon running on the host.
 
 The judge worker:
 - Consumes submission jobs from RabbitMQ (`judge.queue`)
-- Runs code in isolated Docker containers (gcc:13, openjdk:21, python:3.12, etc.)
-- Enforces CPU, memory, and time limits per problem
+- Runs code in isolated Docker containers (gcc:13, eclipse-temurin:21, python:3.12, etc.), hardened: network disabled, all capabilities dropped, `no-new-privileges`, PID-limited (fork-bomb guard), output-capped (flood guard)
+- Enforces CPU, memory, and wall-clock time limits per problem; reports real per-run time
+- Pre-pulls all sandbox images on startup so the first submission per language doesn't stall
 - Downloads test cases from MinIO, compares output (exact match, trimmed)
-- Publishes verdict back via `judge.result.queue`
+- Emits a `JUDGING` progress signal on pickup, then publishes the verdict via `judge.result.queue`
 
-Supported languages: Java, C++, C, Python, JavaScript, Go, Rust, Kotlin.
+Verdicts: `AC`, `WA`, `TLE`, `MLE` (cgroup OOM detection), `RE`, `CE`.
 
-### 4. Stop infrastructure
+Supported languages: Java, C++, C, Python, JavaScript, Go, Rust.
+(Kotlin is accepted by the API but currently always CE — the sandbox image has no `kotlinc`.)
+
+### 4. Run the frontend (dev)
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Vite dev server on **http://localhost:5173**, proxies `/api` to `:8080`.
+
+### 5. Stop infrastructure
 
 ```bash
 docker compose down
@@ -60,24 +97,18 @@ docker compose down
 
 Add `-v` to also remove data volumes.
 
-### 5. Production deployment (Docker)
-
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-This builds and runs both the API and Judge Worker alongside infrastructure services. See the deployment guide (`DEPLOYMENT.md`) for full details.
-
 ## Project Structure
 
 ```
 codearena/
 ├── docker-compose.yml          # Infrastructure only (local dev)
-├── docker-compose.prod.yml     # Full stack (infra + app services)
+├── docker-compose.full.yml     # Whole stack in Docker (infra + api + judge + frontend)
 ├── codearena-api/              # Main Spring Boot API
-│   └── Dockerfile              # Multi-stage production build
-└── codearena-judge/            # Judge worker (submission evaluator)
-    └── Dockerfile              # Multi-stage production build
+│   └── Dockerfile              # Multi-stage build (gradle image → JRE-only runtime)
+├── codearena-judge/            # Judge worker (submission evaluator)
+│   └── Dockerfile              # Multi-stage build; runs as root for docker.sock access
+└── frontend/                   # React + TS + Tailwind SPA
+    └── Dockerfile              # Node build → nginx serve (+ /api reverse proxy)
 ```
 
 ## API Endpoints
@@ -106,6 +137,7 @@ codearena/
 |--------|-------------------|--------------------------------------|----------------|
 | GET    | `/`               | List problems (filter, search, page) | No             |
 | GET    | `/{slug}`         | Get problem detail                   | No             |
+| GET    | `/{slug}/samples` | Sample test cases (actual I/O text)  | No             |
 | POST   | `/`               | Create problem                       | PROBLEM_SETTER |
 | PUT    | `/{id}`           | Update problem                       | PROBLEM_SETTER |
 | POST   | `/{id}/test-cases`| Upload test case (multipart)         | PROBLEM_SETTER |
@@ -154,8 +186,17 @@ Authentication uses JWT Bearer tokens. Include `Authorization: Bearer <token>` h
 
 ## Key Features
 
+- **Hardened sandboxed judging**: every submission compiles and runs in a Docker container with no network, all capabilities dropped, `no-new-privileges`, a PID cap (fork-bomb safe) and output cap (flood safe), plus CPU/memory/time limits; resilient to worker crashes (durable RabbitMQ queue + redelivery, verified)
+- **All six verdicts**: AC / WA / TLE / MLE (cgroup OOM detection) / RE / CE, with `JUDGING` progress signalled on pickup
+- **ICPC standings** with Redis caching, invalidated on accepted contest submissions
 - **Structured error responses** with error codes (`VALIDATION_ERROR`, `RESOURCE_NOT_FOUND`, `ACCESS_DENIED`, etc.)
 - **Redis caching** on hot paths (problem detail, tags, user profiles) with auto-eviction on writes
 - **Structured JSON logging** (production profile) with correlation IDs via `X-Correlation-ID` header
 - **Full Swagger documentation** with `@Schema` examples on all request/response DTOs
 - **Multi-stage Docker builds** for minimal production images (JRE-only runtime)
+
+## Known Gaps
+
+- No rating recalculation after rated contests (leaderboard ranks by static initial rating)
+- Kotlin submissions always CE (no `kotlinc` in sandbox image)
+- Unauthenticated requests return 403 rather than 401 (Spring Security default)

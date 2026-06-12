@@ -37,6 +37,11 @@ public class MinioService {
 
     public String uploadFile(String folder, MultipartFile file) {
         String objectName = folder + "/" + UUID.randomUUID() + "_" + file.getOriginalFilename();
+        return uploadFileAs(objectName, file);
+    }
+
+    /** Upload under an exact object key (used where key ordering is semantically meaningful). */
+    public String uploadFileAs(String objectName, MultipartFile file) {
         try {
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(minioConfig.getBucket())
@@ -58,6 +63,15 @@ public class MinioService {
                     .build());
         } catch (Exception e) {
             throw new RuntimeException("Failed to download file from MinIO", e);
+        }
+    }
+
+    /** Read a (small) object fully into a UTF-8 string. Used for inlining sample test-case text. */
+    public String downloadAsString(String objectName) {
+        try (InputStream is = downloadFile(objectName)) {
+            return new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read object from MinIO: " + objectName, e);
         }
     }
 

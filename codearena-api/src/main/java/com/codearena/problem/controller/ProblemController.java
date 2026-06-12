@@ -46,6 +46,13 @@ public class ProblemController {
         return ResponseEntity.ok(ApiResponse.success(problemService.getProblemBySlug(slug)));
     }
 
+    @GetMapping("/{slug}/samples")
+    @Operation(summary = "Get the sample test cases (input/output text) for a problem")
+    public ResponseEntity<ApiResponse<List<SampleTestCaseResponse>>> getSampleTestCases(
+            @PathVariable String slug) {
+        return ResponseEntity.ok(ApiResponse.success(problemService.getSampleTestCases(slug)));
+    }
+
     @PostMapping
     @PreAuthorize("hasAnyRole('PROBLEM_SETTER', 'ADMIN')")
     @Operation(summary = "Create a new problem")

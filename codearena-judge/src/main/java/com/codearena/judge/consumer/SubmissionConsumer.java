@@ -27,6 +27,11 @@ public class SubmissionConsumer {
     public void onSubmission(JudgeTask task) {
         log.info("Received judge task for submission {}, language={}", task.submissionId(), task.language());
 
+        // Surface progress to pollers: PENDING -> JUDGING as soon as a worker picks
+        // the task up. The API listener applies this only while still PENDING.
+        rabbitTemplate.convertAndSend(RabbitMQConfig.RESULT_QUEUE,
+                new JudgeResult(task.submissionId(), "JUDGING", null, null, 0, 0));
+
         try {
             JudgeResult result = judgeService.judge(task);
             log.info("Submission {} verdict: {}, passed {}/{}", task.submissionId(),

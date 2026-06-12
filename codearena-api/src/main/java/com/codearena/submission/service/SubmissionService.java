@@ -108,12 +108,16 @@ public class SubmissionService {
         return SubmissionDetailResponse.from(submission);
     }
 
+    // readOnly transactions keep the Hibernate session open while the DTO mappers
+    // walk lazy associations (submission.user / submission.problem).
+    @Transactional(readOnly = true)
     public SubmissionDetailResponse getSubmission(Long id) {
         Submission submission = submissionRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Submission", "id", id));
         return SubmissionDetailResponse.from(submission);
     }
 
+    @Transactional(readOnly = true)
     public Page<SubmissionListResponse> listSubmissions(Long userId, Long problemId,
                                                          String language, String verdict,
                                                          Pageable pageable) {
@@ -139,11 +143,13 @@ public class SubmissionService {
                 .map(SubmissionListResponse::from);
     }
 
+    @Transactional(readOnly = true)
     public Page<SubmissionListResponse> getUserSubmissions(String username, Pageable pageable) {
         return submissionRepository.findByUserUsernameOrderBySubmittedAtDesc(username, pageable)
                 .map(SubmissionListResponse::from);
     }
 
+    @Transactional(readOnly = true)
     public Page<SubmissionListResponse> getMyContestSubmissions(Long contestId, Long userId, Pageable pageable) {
         return submissionRepository.findByContestIdAndUserIdOrderBySubmittedAtDesc(contestId, userId, pageable)
                 .map(SubmissionListResponse::from);

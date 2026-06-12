@@ -1,18 +1,18 @@
-FROM eclipse-temurin:21-jdk-alpine AS build
+# gradle image ships Gradle preinstalled — avoids the flaky wrapper download
+# of the distribution from services.gradle.org on every source change.
+FROM gradle:8.10.2-jdk21-alpine AS build
 WORKDIR /workspace
 
-COPY ../gradle gradle
-COPY ../gradlew .
-COPY ../build.gradle.kts .
-COPY ../settings.gradle.kts .
+COPY build.gradle.kts settings.gradle.kts ./
 COPY codearena-api/build.gradle.kts codearena-api/
 COPY codearena-judge/build.gradle.kts codearena-judge/
 
-RUN ./gradlew :codearena-api:dependencies --no-daemon || true
+# Warm the dependency cache in its own layer (survives src-only changes)
+RUN gradle :codearena-api:dependencies --no-daemon -q > /dev/null || true
 
 COPY codearena-api/src codearena-api/src
 
-RUN ./gradlew :codearena-api:bootJar --no-daemon -x test
+RUN gradle :codearena-api:bootJar --no-daemon -x test
 
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app

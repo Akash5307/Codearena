@@ -37,11 +37,13 @@ public class BlogService {
         this.userRepository = userRepository;
     }
 
+    @Transactional(readOnly = true)
     public Page<BlogPostListResponse> listPosts(Pageable pageable) {
         return blogPostRepository.findAllByOrderByCreatedAtDesc(pageable)
                 .map(BlogPostListResponse::from);
     }
 
+    @Transactional(readOnly = true)
     public BlogPostDetailResponse getPost(Long id) {
         BlogPost post = blogPostRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("BlogPost", "id", id));

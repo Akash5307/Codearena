@@ -21,7 +21,7 @@ public interface ProblemRepository extends JpaRepository<Problem, Long> {
             SELECT DISTINCT p FROM Problem p
             LEFT JOIN p.tags t
             WHERE p.isPublished = true
-            AND (:title IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :title, '%')))
+            AND (:title IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', CAST(:title AS string), '%')))
             AND (:difficulty IS NULL OR p.difficulty = :difficulty)
             AND (:tagName IS NULL OR t.name = :tagName)
             """)

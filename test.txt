@@ -1,0 +1,397 @@
+================================================================================
+ CodeArena — MANUAL TEST PLAYBOOK
+ Run these top-to-bottom to confirm the whole system works.
+ Everything is copy-paste. Each step says what to EXPECT.
+================================================================================
+
+Legend:  $  = run in your terminal      ✅ = expected result
+
+--------------------------------------------------------------------------------
+ 0. BRING UP THE STACK
+--------------------------------------------------------------------------------
+$ cd "/home/akash/Desktop/CF Clone (Copy 2)"
+$ docker compose -f docker-compose.full.yml up -d --build
+
+Wait ~1-2 min on first run, then check everything is up:
+$ docker ps --format '{{.Names}}: {{.Status}}'
+✅ 7 containers: postgres, redis, rabbitmq, minio (healthy) + api, judge, frontend
+
+Wait for the API to report healthy:
+$ until curl -sf http://localhost:8080/actuator/health | grep -q UP; do sleep 3; done; echo "API UP"
+✅ prints: API UP
+
+Open in a browser:
+  Frontend ......... http://localhost:3000
+  Swagger UI ....... http://localhost:8080/swagger-ui.html
+  RabbitMQ UI ...... http://localhost:15672   (guest / guest)
+  MinIO console .... http://localhost:9001     (minioadmin / minioadmin)
+
+NOTE: all API calls below go through the frontend proxy (:3000/api) on purpose —
+that exercises the frontend + backend together. They also work on :8080 directly.
+
+A tiny helper so the examples are readable (optional):
+$ BASE=http://localhost:3000/api/v1
+
+--------------------------------------------------------------------------------
+ 1. AUTH  (register / login / refresh / logout)
+--------------------------------------------------------------------------------
+Register a normal user:
+$ curl -s -X POST $BASE/auth/register -H 'Content-Type: application/json' \
+    -d '{"username":"alice","email":"alice@test.com","password":"Password123!"}'
+✅ {"success":true,"data":{"accessToken":"...","refreshToken":"...", ...}}
+
+Login (NOTE the field is usernameOrEmail, not username):
+$ curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' \
+    -d '{"usernameOrEmail":"alice","password":"Password123!"}'
+✅ success:true with a fresh token pair
+
+Save the access token to a variable for later steps:
+$ ALICE=$(curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' \
+    -d '{"usernameOrEmail":"alice","password":"Password123!"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['accessToken'])")
+$ echo "${ALICE:0:20}..."
+✅ prints the start of a JWT (eyJhbG...)
+
+Negative checks (these should FAIL gracefully):
+$ curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' \
+    -d '{"usernameOrEmail":"alice","password":"wrong"}'
+✅ success:false  (wrong password rejected)
+
+$ curl -s -X POST $BASE/auth/register -H 'Content-Type: application/json' \
+    -d '{"username":"alice","email":"x@y.com","password":"Password123!"}'
+✅ success:false  (duplicate username rejected)
+
+--------------------------------------------------------------------------------
+ 2. MAKE YOURSELF AN ADMIN  (needed to create problems & contests)
+--------------------------------------------------------------------------------
+Roles can't be self-assigned via the API (by design). Promote alice via SQL,
+then LOG IN AGAIN so the new role is in a fresh token:
+
+$ docker exec codearena-postgres psql -U codearena -d codearena \
+    -c "UPDATE users SET role='ADMIN' WHERE username='alice';"
+✅ UPDATE 1
+
+$ ALICE=$(curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' \
+    -d '{"usernameOrEmail":"alice","password":"Password123!"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['accessToken'])")
+
+--------------------------------------------------------------------------------
+ 3. PROBLEMS  (create / publish / upload test cases / browse)
+--------------------------------------------------------------------------------
+Create a problem "A Plus B":
+$ PID=$(curl -s -X POST $BASE/problems -H "Authorization: Bearer $ALICE" \
+    -H 'Content-Type: application/json' \
+    -d '{"title":"A Plus B","statement":"Read two integers, print their sum.","inputFormat":"two ints a b","outputFormat":"a+b","difficulty":"EASY","timeLimitMs":2000,"memoryLimitMb":256,"tags":["math"]}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ echo "problem id = $PID"
+✅ prints a numeric id
+
+Publish it (problems are unpublished by default):
+$ curl -s -X PUT $BASE/problems/$PID -H "Authorization: Bearer $ALICE" \
+    -H 'Content-Type: application/json' -d '{"isPublished":true}'
+✅ success:true, "isPublished":true
+
+Upload 2 test cases (1 sample + 1 hidden):
+$ printf '3 4\n' > /tmp/in1.txt;  printf '7\n'  > /tmp/out1.txt
+$ printf '10 -2\n' > /tmp/in2.txt; printf '8\n' > /tmp/out2.txt
+$ curl -s -X POST $BASE/problems/$PID/test-cases -H "Authorization: Bearer $ALICE" \
+    -F input=@/tmp/in1.txt -F output=@/tmp/out1.txt -F sample=true
+$ curl -s -X POST $BASE/problems/$PID/test-cases -H "Authorization: Bearer $ALICE" \
+    -F input=@/tmp/in2.txt -F output=@/tmp/out2.txt
+✅ both success:true
+
+Browse (public, no auth):
+$ curl -s "$BASE/problems?page=0&size=10"
+✅ success:true, your problem in content[]
+
+$ curl -s $BASE/problems/a-plus-b
+✅ success:true, full problem detail
+
+Sample I/O endpoint (should show REAL text, and ONLY the sample, not the hidden one):
+$ curl -s $BASE/problems/a-plus-b/samples
+✅ [{"id":...,"orderIndex":0,"input":"3 4\n","output":"7\n"}]   (exactly 1 entry)
+
+Permission check — a normal user can't create problems:
+$ BOB=$(curl -s -X POST $BASE/auth/register -H 'Content-Type: application/json' \
+    -d '{"username":"bob","email":"bob@test.com","password":"Password123!"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['accessToken'])")
+$ curl -s -X POST $BASE/problems -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' -d '{"title":"x","statement":"y","difficulty":"EASY"}'
+✅ success:false  (403 / access denied)
+
+--------------------------------------------------------------------------------
+ 4. THE JUDGE LOOP  (the heart of the system)
+--------------------------------------------------------------------------------
+A small poll helper — paste this function into your shell:
+$ verdict(){ for i in $(seq 1 40); do
+    V=$(curl -s $BASE/submissions/$1 -H "Authorization: Bearer $2" \
+        | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['verdict'])");
+    [ "$V" != PENDING ] && [ "$V" != JUDGING ] && { echo "$V"; return; }; sleep 2;
+  done; echo TIMEOUT; }
+
+NOTE: the FIRST submission in a new language may take ~20s extra the very first
+time (image warm-up). After that it's fast.
+
+(a) CORRECT solution -> AC
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"a,b=map(int,input().split())\nprint(a+b)"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ AC
+
+(b) WRONG answer -> WA   (wait ~11s between submits: rate limit is 1/10s)
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"a,b=map(int,input().split())\nprint(a-b)"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ WA
+
+(c) COMPILE error -> CE  (use a broken C++ program)
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"CPP","sourceCode":"int main(){ broken"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ CE
+
+(d) TIME LIMIT -> TLE  (infinite loop)
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"while True: pass"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ TLE
+
+(e) MEMORY LIMIT -> MLE  (allocate way past 256MB)
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"x=bytearray(600*1024*1024)\nprint(len(x))"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ MLE
+
+(f) RUNTIME error -> RE
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"print(1//0)"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ RE
+
+Check a finished submission shows real stats:
+$ curl -s $BASE/submissions/$SID -H "Authorization: Bearer $BOB"
+✅ has verdict, timeUsedMs (>0 for AC/WA/TLE), testCasesPassed / totalTestCases
+
+Rate limit check — submit twice fast:
+$ curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"x=1"}' >/dev/null
+$ curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"x=1"}'
+✅ second one: success:false, "Please wait 10 seconds..."
+
+--------------------------------------------------------------------------------
+ 5. OTHER LANGUAGES (optional, confirms compiled + interpreted paths)
+--------------------------------------------------------------------------------
+Java (compiled):
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"JAVA","sourceCode":"import java.util.*;public class Solution{public static void main(String[] a){Scanner s=new Scanner(System.in);System.out.println(s.nextInt()+s.nextInt());}}"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ AC
+
+C++ (compiled):
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"CPP","sourceCode":"#include<bits/stdc++.h>\nusing namespace std;int main(){int a,b;cin>>a>>b;cout<<a+b<<endl;}"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ AC
+
+--------------------------------------------------------------------------------
+ 6. CONTESTS  (create / register / standings)
+--------------------------------------------------------------------------------
+Contests must START IN THE FUTURE, then you wait / time-shift them to run.
+
+Create a contest containing the problem (starts 1 hour from now):
+$ START=$(python3 -c "from datetime import datetime,timedelta,timezone;print((datetime.now(timezone.utc)+timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S'))")
+$ CID=$(curl -s -X POST $BASE/contests -H "Authorization: Bearer $ALICE" \
+    -H 'Content-Type: application/json' \
+    -d '{"title":"Round 1","description":"test","type":"ICPC","startTime":"'$START'","durationMinutes":120,"isRated":true,"problems":[{"problemId":'$PID',"label":"A","orderIndex":0,"points":100}]}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ echo "contest id = $CID"
+✅ numeric id
+
+It should be listed and in BEFORE state:
+$ curl -s "$BASE/contests?status=upcoming"
+✅ success:true, your contest present
+$ curl -s $BASE/contests/round-1
+✅ "state":"BEFORE"
+
+Register bob:
+$ curl -s -X POST $BASE/contests/$CID/register -H "Authorization: Bearer $BOB"
+✅ success:true
+$ curl -s -X POST $BASE/contests/$CID/register -H "Authorization: Bearer $BOB"
+✅ success:false  (double-register rejected)
+
+Time-shift it into RUNNING (so you don't have to wait an hour):
+$ docker exec codearena-postgres psql -U codearena -d codearena \
+    -c "UPDATE contests SET start_time = now() - interval '5 minutes' WHERE id=$CID;"
+$ curl -s $BASE/contests/round-1
+✅ "state":"RUNNING"
+
+Submit inside the contest:
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"contestId":'$CID',"language":"PYTHON","sourceCode":"a,b=map(int,input().split())\nprint(a+b)"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ AC
+
+Standings (ICPC: solved count + penalty):
+$ curl -s $BASE/contests/$CID/standings
+✅ entries[] with bob: rank 1, solvedCount 1, penaltyMinutes ~5, problem A solved
+
+My contest submissions:
+$ curl -s $BASE/contests/$CID/my-submissions -H "Authorization: Bearer $BOB"
+✅ success:true, totalElements >= 1
+
+--------------------------------------------------------------------------------
+ 7. USERS & LEADERBOARD
+--------------------------------------------------------------------------------
+$ curl -s $BASE/users/bob
+✅ success:true, username bob, rating 1500
+
+$ curl -s $BASE/users/bob/submissions
+✅ success:true, bob's submission history
+
+$ curl -s "$BASE/users/ratings?page=0&size=10"
+✅ success:true, users ranked (NOTE: ratings stay 1500 — no rating engine yet, by design)
+
+$ curl -s -X PUT $BASE/users/me -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' -d '{"avatarUrl":"https://example.com/a.png"}'
+✅ success:true, avatarUrl updated
+
+--------------------------------------------------------------------------------
+ 8. BLOGS  (post / comment / vote)
+--------------------------------------------------------------------------------
+$ BLOGID=$(curl -s -X POST $BASE/blogs -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' -d '{"title":"Hello","content":"My first **post**"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ curl -s "$BASE/blogs?page=0&size=10"
+✅ your post in the list
+$ curl -s $BASE/blogs/$BLOGID
+✅ post detail
+$ curl -s -X POST $BASE/blogs/$BLOGID/vote -H "Authorization: Bearer $ALICE" \
+    -H 'Content-Type: application/json' -d '{"voteType":"UPVOTE"}'
+✅ success:true
+$ curl -s -X POST $BASE/blogs/$BLOGID/vote -H "Authorization: Bearer $ALICE" \
+    -H 'Content-Type: application/json' -d '{"voteType":"UPVOTE"}'
+✅ "Vote removed"  (voting same way twice toggles it off)
+$ curl -s -X POST $BASE/blogs/$BLOGID/comments -H "Authorization: Bearer $ALICE" \
+    -H 'Content-Type: application/json' -d '{"content":"Nice!"}'
+✅ success:true  (comment added; reply by passing "parentId")
+Non-author can't edit:
+$ curl -s -X PUT $BASE/blogs/$BLOGID -H "Authorization: Bearer $ALICE" \
+    -H 'Content-Type: application/json' -d '{"title":"hijack","content":"x"}'
+✅ success:false
+
+--------------------------------------------------------------------------------
+ 9. SECURITY SPOT CHECKS
+--------------------------------------------------------------------------------
+No token on a protected route:
+$ curl -s -o /dev/null -w "%{http_code}\n" -X PUT $BASE/users/me -H 'Content-Type: application/json' -d '{}'
+✅ 403
+
+Garbage token:
+$ curl -s -o /dev/null -w "%{http_code}\n" -X PUT $BASE/users/me \
+    -H 'Authorization: Bearer not.a.real.token' -H 'Content-Type: application/json' -d '{}'
+✅ 403
+
+Bad id type / unknown id / unknown slug (clean errors, not 500s):
+$ curl -s -o /dev/null -w "%{http_code}\n" $BASE/submissions/abc -H "Authorization: Bearer $BOB"   # 400
+$ curl -s -o /dev/null -w "%{http_code}\n" $BASE/submissions/999999 -H "Authorization: Bearer $BOB" # 404
+$ curl -s -o /dev/null -w "%{http_code}\n" $BASE/problems/nope-nope                                  # 404
+✅ 400, 404, 404
+
+--------------------------------------------------------------------------------
+ 10. SANDBOX HARDENING  (abuse can't take the judge down)
+--------------------------------------------------------------------------------
+Fork bomb -> should be a verdict (RE), judge must stay alive:
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"import os\nwhile True: os.fork()"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ verdict $SID $BOB
+✅ a verdict comes back (RE/TLE) — NOT a hang
+$ docker ps --format '{{.Names}}: {{.Status}}' | grep judge
+✅ codearena-judge still Up  (it survived the fork bomb)
+
+--------------------------------------------------------------------------------
+ 11. RESILIENCE  (crash + restart safety)
+--------------------------------------------------------------------------------
+Worker down -> submission waits in the durable queue -> judged on restart:
+$ docker stop codearena-judge
+$ sleep 11
+$ SID=$(curl -s -X POST $BASE/submissions -H "Authorization: Bearer $BOB" \
+    -H 'Content-Type: application/json' \
+    -d '{"problemId":'$PID',"language":"PYTHON","sourceCode":"a,b=map(int,input().split())\nprint(a+b)"}' \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['id'])")
+$ curl -s $BASE/submissions/$SID -H "Authorization: Bearer $BOB" | grep -o '"verdict":"[A-Z]*"'
+✅ "verdict":"PENDING"  (no worker to judge it yet)
+$ docker exec codearena-rabbitmq rabbitmqctl list_queues name messages | grep judge.queue
+✅ judge.queue   1     (message safely waiting)
+$ docker start codearena-judge
+$ verdict $SID $BOB
+✅ AC  (message survived the worker being down — nothing lost)
+
+Full cold restart keeps all data:
+$ docker compose -f docker-compose.full.yml restart
+$ until curl -sf http://localhost:8080/actuator/health | grep -q UP; do sleep 3; done; echo UP
+$ curl -s "$BASE/problems" | python3 -c "import sys,json;print('problems:',json.load(sys.stdin)['data']['totalElements'])"
+✅ problems still there
+$ docker exec codearena-postgres psql -U codearena -d codearena -t \
+    -c "SELECT count(*) FROM submissions WHERE verdict IN ('PENDING','JUDGING');"
+✅ 0  (nothing stuck)
+
+--------------------------------------------------------------------------------
+ 12. FRONTEND  (click-through in the browser)
+--------------------------------------------------------------------------------
+Open http://localhost:3000 and verify:
+  [ ] Register / login works, you stay logged in on refresh
+  [ ] Problems list shows "A Plus B"
+  [ ] Problem page renders the statement + the Examples (real sample I/O, copy button)
+  [ ] Submit a solution -> verdict updates live (PENDING/JUDGING -> AC) without reload
+  [ ] Submissions page lists your submissions with colored verdicts
+  [ ] A deep link (e.g. http://localhost:3000/problems/a-plus-b) loads directly (SPA fallback)
+
+--------------------------------------------------------------------------------
+ 13. BACKEND UNIT TESTS  (no running stack needed)
+--------------------------------------------------------------------------------
+$ ./gradlew test
+✅ BUILD SUCCESSFUL — 61 tests, 0 failures
+
+--------------------------------------------------------------------------------
+ TEAR DOWN
+--------------------------------------------------------------------------------
+Stop, keep data:     $ docker compose -f docker-compose.full.yml down
+Stop, wipe data:     $ docker compose -f docker-compose.full.yml down -v
+
+================================================================================
+ KNOWN / EXPECTED (not bugs):
+  - Ratings never change after a rated contest (no rating engine yet).
+  - Kotlin submissions always return CE (sandbox image has no kotlinc).
+  - Unauthenticated requests return 403 (not 401) — Spring Security default.
+  - First submission per language is slow once (Docker image warm-up).
+================================================================================
