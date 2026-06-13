@@ -29,6 +29,10 @@ frontend/vite.config.d.ts
 # Generated knowledge graph (graphify)
 graphify-out/
 
+# AI assistant tooling / instructions (local only)
+#.claude/
+#CLAUDE.md
+
 # Personal notes (intentionally untracked)
 Working.md
 Resume.md

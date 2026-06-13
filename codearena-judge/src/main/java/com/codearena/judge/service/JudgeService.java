@@ -33,6 +33,10 @@ public class JudgeService {
 
     private static final Logger log = LoggerFactory.getLogger(JudgeService.class);
 
+    // Compilation budget — independent of (and larger than) the problem's run limits.
+    private static final long COMPILE_TIMEOUT_MS = 60_000;
+    private static final long COMPILE_MEMORY_BYTES = 1024L * 1024 * 1024; // 1 GB
+
     private final DockerSandbox sandbox;
     private final MinioClient minioClient;
     private final MinioConfig minioConfig;
@@ -79,11 +83,13 @@ public class JudgeService {
             Bind bind = new Bind(sandboxDir.toAbsolutePath().toString(), new Volume("/sandbox"));
             long memoryBytes = (long) task.memoryLimitMb() * 1024 * 1024;
 
-            // Compile step (if needed)
+            // Compile step (if needed). Compilers (kotlinc, rustc, g++) need far
+            // more memory and time than the solution's own run limits, so give the
+            // compile step its own generous budget rather than the problem's limit.
             if (spec.compileCmd() != null) {
                 ExecutionResult compileResult = sandbox.execute(
                         spec.image(), spec.compileCmd(), null,
-                        30_000, memoryBytes, bind);
+                        COMPILE_TIMEOUT_MS, COMPILE_MEMORY_BYTES, bind);
 
                 if (compileResult.exitCode() != 0) {
                     log.info("Compilation error for submission {}: {}", task.submissionId(), compileResult.stderr());

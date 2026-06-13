@@ -71,8 +71,9 @@ public class DockerSandbox {
                     "rust:1.77-slim", new String[]{"rustc", "-O", "-o", "/sandbox/solution", "/sandbox/solution.rs"},
                     new String[]{"/sandbox/solution"}, "solution.rs");
             case "KOTLIN" -> new LanguageSpec(
-                    // NOTE: known limitation — this image has no kotlinc, Kotlin submissions will CE
-                    "eclipse-temurin:21-jdk-alpine", new String[]{"kotlinc", "/sandbox/Solution.kt", "-include-runtime", "-d", "/sandbox/solution.jar"},
+                    // Custom image (Temurin 21 + kotlinc); build with
+                    // sandbox-images/kotlin/Dockerfile and tag codearena-kotlin:21.
+                    "codearena-kotlin:21", new String[]{"kotlinc", "/sandbox/Solution.kt", "-include-runtime", "-d", "/sandbox/solution.jar"},
                     new String[]{"java", "-jar", "/sandbox/solution.jar"}, "Solution.kt");
             default -> throw new IllegalArgumentException("Unsupported language: " + language);
         };

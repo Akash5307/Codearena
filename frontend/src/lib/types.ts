@@ -226,3 +226,36 @@ export interface Standings {
   contestTitle: string;
   entries: StandingsEntry[];
 }
+
+// ---- Blogs ----
+export interface BlogListItem {
+  id: number;
+  title: string;
+  authorUsername: string;
+  upvotes: number;
+  downvotes: number;
+  commentCount: number;
+  createdAt: string;
+}
+
+export interface BlogComment {
+  id: number;
+  authorUsername: string;
+  content: string;
+  parentId: number | null;
+  replies: BlogComment[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BlogDetail {
+  id: number;
+  title: string;
+  content: string;
+  authorUsername: string;
+  upvotes: number;
+  downvotes: number;
+  comments: BlogComment[];
+  createdAt: string;
+  updatedAt: string;
+}

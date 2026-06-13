@@ -526,8 +526,8 @@ still deferred (the backend for them works and is tested).
 - Verdicts: `PENDING, JUDGING, AC, WA, TLE, MLE, RE, CE` (PENDING/JUDGING ⇒ keep
   polling `GET /submissions/{id}`). MLE comes from the container's OOMKilled
   flag. Difficulty enum is UPPERCASE. Languages:
-  `JAVA, CPP, C, PYTHON, JAVASCRIPT, GO, RUST, KOTLIN` (Kotlin always CE —
-  sandbox image has no kotlinc).
+  `JAVA, CPP, C, PYTHON, JAVASCRIPT, GO, RUST, KOTLIN` (Kotlin runs via the
+  custom codearena-kotlin:21 image — build it on the judge host).
 - Sample I/O: `GET /problems/{slug}/samples` (public) returns
   `[{id, orderIndex, input, output}]` — actual text, samples only, hidden test
   cases never served. ProblemDetail renders these in a CF-style examples grid.
@@ -609,10 +609,18 @@ it boots even before the API is up (returns 502 until ready). Ports: frontend
 - Backend Dockerfiles build with `gradle:8.10.2-jdk21-alpine` (no wrapper
   download — services.gradle.org is flaky from this network).
 - Sandbox images: gcc:13, eclipse-temurin:21-jdk-alpine (java),
-  python:3.12-slim, node:20-slim, golang:1.22-alpine, rust:1.77-slim.
-  Pre-pull on the judge host or first submission per language stalls.
-- Known gaps: no rating recalculation engine (leaderboard ranks static 1500);
-  Kotlin always CE; unauthenticated requests get 403 not 401.
+  python:3.12-slim, node:20-slim, golang:1.22-alpine, rust:1.77-slim, and the
+  custom codearena-kotlin:21 (build: `docker build -t codearena-kotlin:21
+  codearena-judge/sandbox-images/kotlin`). Pre-pull or first submission stalls.
+- Compile step uses a separate generous budget (1 GB / 60s), independent of the
+  problem's run limits — compilers (kotlinc/rustc/g++) need far more than 256 MB.
+- Rating engine: RatingService applies Codeforces-style deltas when a rated
+  contest ends (RatingScheduler polls; admin POST /contests/{id}/rate triggers
+  manually); idempotent via contests.ratings_applied; history in rating_changes.
+- Auth errors: unauthenticated → 401, authenticated-but-forbidden → 403 (custom
+  AuthenticationEntryPoint + AccessDeniedHandler in SecurityConfig).
+- Known gaps: verdict/standings are poll-based (no WebSocket push, by design);
+  no plagiarism detection.
 
 ## Frontend TODO / future
 

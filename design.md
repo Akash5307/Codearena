@@ -1,7 +1,7 @@
 # CodeArena — System Design
 
 > A Codeforces-style competitive programming platform: register, browse problems,
-> submit code in 7 languages, get it judged in isolated Docker sandboxes, and
+> submit code in 8 languages, get it judged in isolated Docker sandboxes, and
 > climb live ICPC standings. Java 21 + Spring Boot 3.3 backend, React + TypeScript
 > frontend, async judge worker.
 
@@ -352,7 +352,7 @@ so the first submission in a language doesn't stall on a multi-hundred-MB pull.
 | JavaScript | `node:20-slim` | — | `node solution.js` |
 | Go | `golang:1.22-alpine` | `go build -o /sandbox/solution` | `/sandbox/solution` |
 | Rust | `rust:1.77-slim` | `rustc -O -o /sandbox/solution` | `/sandbox/solution` |
-| Kotlin | `eclipse-temurin:21-jdk-alpine` | `kotlinc …` *(no kotlinc in image → always CE)* | `java -jar solution.jar` |
+| Kotlin | `codearena-kotlin:21` (custom: Temurin 21 + kotlinc) | `kotlinc … -include-runtime -d solution.jar` | `java -jar solution.jar` |
 
 **Verdict decision order** (per test, first match wins): `timedOut → TLE`, `oomKilled → MLE`, `exit≠0 → RE`, `stdout.trim()≠expected.trim() → WA`; all tests pass → `AC`; compile non-zero → `CE`.
 
@@ -411,11 +411,11 @@ Every response is `ApiResponse<T> = { success, data, errorCode, error }`. A sing
 - **Health**: `GET /actuator/health` (checks Postgres, Redis, RabbitMQ connectivity).
 - **API docs**: SpringDoc OpenAPI at `/swagger-ui.html`, with `@Schema` examples on DTOs.
 
-### 3.9 Testing
+### 3.9 Testing & CI
 
-- **61 unit/slice tests** on the API (Mockito + MockMvc, no infra required) — all green after this session's changes.
-- **End-to-end verification** against the live Dockerized stack (~70 checks): every endpoint, all six verdicts, four languages incl. a compiled one, concurrency, worker-crash redelivery, cold-restart persistence, JWT-attack rejection, and the sandbox abuse tests (fork bomb, output flood) above.
-- *(Gap: the judge module currently has no unit tests — its logic is covered only by the e2e flow. Verdict-decision-order and test-case pairing are the natural next units.)*
+- **75 unit/slice tests**: 61 on the API (Mockito + MockMvc, no infra required) and 14 on the judge (the language-spec matrix — guarding image names, compile vs interpreted, unsupported-language rejection).
+- **End-to-end verification** against the live Dockerized stack (~70 checks): every endpoint, all six verdicts, multiple languages incl. compiled ones, concurrency, worker-crash redelivery, cold-restart persistence, JWT-attack rejection, and sandbox abuse (fork bomb, output flood).
+- **CI** (`.github/workflows/ci.yml`) runs the backend tests, the frontend typecheck+build, and all three Docker image builds on every push/PR.
 
 ---
 
@@ -456,7 +456,7 @@ The architecture already separates the two axes that scale differently:
 
 ### Appendix: current known gaps (intentional, documented)
 
-- No rating recalculation after rated contests (leaderboard ranks by static initial rating).
-- Kotlin submissions always `CE` (sandbox image lacks `kotlinc`).
+- Verdict/standings updates are poll-based, not pushed (no WebSocket).
+- No plagiarism detection on submissions.
 - Unauthenticated requests return `403` rather than `401` (Spring Security default).
 - Verdict/standings delivery is poll-based, not pushed.

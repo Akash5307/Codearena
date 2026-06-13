@@ -1,3 +1,7 @@
+docker exec -it codearena-postgres sh
+psql -U codearena -d codearena
+docker stop $(docker ps -q)
+
 ================================================================================
  CodeArena — MANUAL TEST PLAYBOOK
  Run these top-to-bottom to confirm the whole system works.

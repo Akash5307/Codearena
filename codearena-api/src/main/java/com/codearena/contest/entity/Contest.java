@@ -43,6 +43,10 @@ public class Contest {
     @Column(name = "is_rated", nullable = false)
     private Boolean isRated = true;
 
+    // Set once the rating engine has processed this contest (idempotency guard).
+    @Column(name = "ratings_applied", nullable = false)
+    private Boolean ratingsApplied = false;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "author_id", nullable = false)
     private User author;

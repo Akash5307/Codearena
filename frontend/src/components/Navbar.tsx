@@ -6,6 +6,7 @@ const navTabs = [
   { to: "/contests", label: "Contests" },
   { to: "/status", label: "Status" },
   { to: "/ratings", label: "Rating" },
+  { to: "/blogs", label: "Blog" },
 ];
 
 export function Navbar() {

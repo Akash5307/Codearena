@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { contestApi } from "../lib/services";
-import type { ContestDetail as Contest, Standings } from "../lib/types";
+import type { ContestDetail as Contest, Page, Standings, SubmissionListItem } from "../lib/types";
+import { LANGUAGE_LABELS } from "../lib/types";
 import { ApiError } from "../lib/api";
 import { useAuth } from "../store/auth";
 import { RatingName } from "../components/RatingName";
+import { VerdictBadge } from "../components/VerdictBadge";
+import { Pagination } from "../components/Pagination";
 import { Spinner, ErrorBox } from "../components/Spinner";
 import {
   CONTEST_STATE_LABELS,
@@ -14,13 +17,14 @@ import {
   formatDuration,
 } from "../lib/format";
 
-type Tab = "problems" | "standings";
+type Tab = "problems" | "standings" | "mine";
 
 export function ContestDetail() {
   const { slug = "" } = useParams();
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
-  const tab: Tab = params.get("tab") === "standings" ? "standings" : "problems";
+  const tabParam = params.get("tab");
+  const tab: Tab = tabParam === "standings" ? "standings" : tabParam === "mine" ? "mine" : "problems";
 
   const [contest, setContest] = useState<Contest | null>(null);
   const [loading, setLoading] = useState(true);
@@ -169,13 +173,13 @@ export function ContestDetail() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-cf-border">
-        {(["problems", "standings"] as Tab[]).map((t) => (
+        {(["problems", "standings", ...(user ? ["mine" as Tab] : [])] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => {
               const next = new URLSearchParams(params);
-              if (t === "standings") next.set("tab", "standings");
-              else next.delete("tab");
+              if (t === "problems") next.delete("tab");
+              else next.set("tab", t);
               setParams(next);
             }}
             className={`-mb-px border-b-2 px-4 py-2 text-[13px] font-bold ${
@@ -184,16 +188,78 @@ export function ContestDetail() {
                 : "border-transparent text-gray-500 hover:text-cf-blue"
             }`}
           >
-            {t === "problems" ? "Problems" : "Standings"}
+            {t === "problems" ? "Problems" : t === "standings" ? "Standings" : "My submissions"}
           </button>
         ))}
       </div>
 
       {tab === "problems" ? (
         <ProblemsTab contest={contest} />
-      ) : (
+      ) : tab === "standings" ? (
         <StandingsTab contestId={contest.id} />
+      ) : (
+        <MySubmissionsTab contestId={contest.id} />
       )}
+    </div>
+  );
+}
+
+function MySubmissionsTab({ contestId }: { contestId: number }) {
+  const [data, setData] = useState<Page<SubmissionListItem> | null>(null);
+  const [page, setPage] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    contestApi
+      .mySubmissions(contestId, { page, size: 20, sort: "submittedAt,desc" })
+      .then(setData)
+      .catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load submissions"))
+      .finally(() => setLoading(false));
+  }, [contestId, page]);
+
+  if (loading) return <Spinner />;
+  if (error) return <ErrorBox message={error} />;
+  if (!data || data.content.length === 0) {
+    return (
+      <div className="cf-panel p-6 text-center text-gray-500">
+        You haven't submitted in this contest yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="cf-panel">
+      <div className="cf-panel-title">My submissions</div>
+      <div className="p-2">
+        <table className="cf-table">
+          <thead>
+            <tr>
+              <th className="w-16">#</th>
+              <th>Problem</th>
+              <th className="w-24">Lang</th>
+              <th className="w-36">Verdict</th>
+              <th className="w-40">When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.content.map((s) => (
+              <tr key={s.id}>
+                <td>
+                  <Link to={`/submissions/${s.id}`} className="font-mono">{s.id}</Link>
+                </td>
+                <td>{s.problemTitle}</td>
+                <td className="text-[12px]">{LANGUAGE_LABELS[s.language] ?? s.language}</td>
+                <td><VerdictBadge verdict={s.verdict} /></td>
+                <td className="text-[12px] text-gray-600">{formatDateTime(s.submittedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <Pagination page={data.number} totalPages={data.totalPages} onChange={setPage} />
+      </div>
     </div>
   );
 }

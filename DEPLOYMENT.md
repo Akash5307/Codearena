@@ -521,6 +521,7 @@ docker pull yourusername/codearena-judge:latest
 - [ ] Set `JUDGE_WORK_DIR` + matching host bind mount for a containerized judge (see DooD section)
 - [x] Sandbox containers are hardened by default: `--network none`, `--cap-drop ALL`, `no-new-privileges`, `--pids-limit 128`, 1 MB output cap, memory/CPU/time limits
 - [x] Sandbox images are pre-pulled automatically on judge startup (background thread). Pre-pulling on the host beforehand still avoids the very first warm-up delay: `gcc:13`, `eclipse-temurin:21-jdk-alpine`, `python:3.12-slim`, `node:20-slim`, `golang:1.22-alpine`, `rust:1.77-slim`
+- [ ] **Kotlin only:** build the custom kotlinc sandbox image once on the judge host (it is never pulled from a registry, only inspected locally): `docker build -t codearena-kotlin:21 codearena-judge/sandbox-images/kotlin`. Without it, Kotlin submissions fail to compile. (The compile step gets a generous 1 GB / 60s budget — independent of the problem's run limits — so kotlinc/rustc/large C++ compiles don't OOM or time out.)
 
 ---
 

@@ -9,6 +9,9 @@ import { CreateProblem } from "./pages/CreateProblem";
 import { ContestList } from "./pages/ContestList";
 import { ContestDetail } from "./pages/ContestDetail";
 import { CreateContest } from "./pages/CreateContest";
+import { BlogList } from "./pages/BlogList";
+import { BlogDetail } from "./pages/BlogDetail";
+import { CreateBlog } from "./pages/CreateBlog";
 import { Status } from "./pages/Status";
 import { SubmissionDetail } from "./pages/SubmissionDetail";
 import { Profile } from "./pages/Profile";
@@ -39,6 +42,24 @@ export default function App() {
           }
         />
         <Route path="/contests/:slug" element={<ContestDetail />} />
+        <Route
+          path="/blogs/new"
+          element={
+            <ProtectedRoute>
+              <CreateBlog />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/blogs/:id/edit"
+          element={
+            <ProtectedRoute>
+              <CreateBlog />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="/blogs" element={<BlogList />} />
+        <Route path="/blogs/:id" element={<BlogDetail />} />
         <Route path="/status" element={<Status />} />
         <Route path="/ratings" element={<Ratings />} />
         <Route path="/users/:username" element={<Profile />} />

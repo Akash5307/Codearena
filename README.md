@@ -78,8 +78,8 @@ The judge worker:
 
 Verdicts: `AC`, `WA`, `TLE`, `MLE` (cgroup OOM detection), `RE`, `CE`.
 
-Supported languages: Java, C++, C, Python, JavaScript, Go, Rust.
-(Kotlin is accepted by the API but currently always CE — the sandbox image has no `kotlinc`.)
+Supported languages: Java, C++, C, Python, JavaScript, Go, Rust, Kotlin.
+(Kotlin runs in a custom `codearena-kotlin:21` sandbox image — build it once on the judge host: `docker build -t codearena-kotlin:21 codearena-judge/sandbox-images/kotlin`. See DEPLOYMENT.md.)
 
 ### 4. Run the frontend (dev)
 
@@ -180,15 +180,19 @@ Authentication uses JWT Bearer tokens. Include `Authorization: Bearer <token>` h
 ## Build & Test
 
 ```bash
-./gradlew build            # compile + test
-./gradlew :codearena-api:test   # run API tests only (61 tests)
+./gradlew build                 # backend: compile + test (75 tests: 61 API + 14 judge)
+cd frontend && npm run build    # frontend: typecheck (tsc) + vite production build
 ```
+
+CI runs all of this on push/PR via `.github/workflows/ci.yml` (backend tests, frontend build, Docker image builds).
 
 ## Key Features
 
+- **React + TypeScript SPA** (Vite + Tailwind, Codeforces-style): problem browsing with Markdown + KaTeX statements, code submission with **live verdict polling**, submission history, contests with live standings, rating-colored profiles, role-gated **admin tooling** (create problems/contests, multipart test-case upload, publish), and a dependency-free auto-indenting code editor
 - **Hardened sandboxed judging**: every submission compiles and runs in a Docker container with no network, all capabilities dropped, `no-new-privileges`, a PID cap (fork-bomb safe) and output cap (flood safe), plus CPU/memory/time limits; resilient to worker crashes (durable RabbitMQ queue + redelivery, verified)
 - **All six verdicts**: AC / WA / TLE / MLE (cgroup OOM detection) / RE / CE, with `JUDGING` progress signalled on pickup
 - **ICPC standings** with Redis caching, invalidated on accepted contest submissions
+- **Codeforces-style rating engine** — when a rated contest ends, ratings are recomputed (seed → performance → delta, with anti-inflation passes), applied idempotently, and recorded per-contest; runs automatically (scheduler) or via an admin trigger
 - **Structured error responses** with error codes (`VALIDATION_ERROR`, `RESOURCE_NOT_FOUND`, `ACCESS_DENIED`, etc.)
 - **Redis caching** on hot paths (problem detail, tags, user profiles) with auto-eviction on writes
 - **Structured JSON logging** (production profile) with correlation IDs via `X-Correlation-ID` header
@@ -197,6 +201,5 @@ Authentication uses JWT Bearer tokens. Include `Authorization: Bearer <token>` h
 
 ## Known Gaps
 
-- No rating recalculation after rated contests (leaderboard ranks by static initial rating)
-- Kotlin submissions always CE (no `kotlinc` in sandbox image)
-- Unauthenticated requests return 403 rather than 401 (Spring Security default)
+- Verdict/standings updates are poll-based, not pushed (no WebSocket) — a deliberate choice to keep the API stateless
+- No plagiarism detection on submissions

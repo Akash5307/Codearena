@@ -22,6 +22,26 @@ export function Profile() {
   const [subs, setSubs] = useState<Page<SubmissionListItem> | null>(null);
   const [subPage, setSubPage] = useState(0);
 
+  // Profile editing (owner only)
+  const [editing, setEditing] = useState(false);
+  const [avatarInput, setAvatarInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  async function saveProfile() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await userApi.updateMe(avatarInput.trim());
+      setProfile(updated);
+      setEditing(false);
+    } catch (e) {
+      setSaveError(e instanceof ApiError ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   useEffect(() => {
     setLoading(true);
     setError(null);
@@ -48,6 +68,14 @@ export function Profile() {
       <aside className="cf-panel h-fit">
         <div className="cf-panel-title">Profile</div>
         <div className="p-4 text-center">
+          {profile.avatarUrl && (
+            <img
+              src={profile.avatarUrl}
+              alt={profile.username}
+              className="mx-auto mb-3 h-20 w-20 rounded border border-cf-border object-cover"
+              onError={(e) => (e.currentTarget.style.display = "none")}
+            />
+          )}
           <div
             className={`text-[22px] font-bold ${ratingColorClass(profile.rating)}`}
           >
@@ -72,6 +100,39 @@ export function Profile() {
           <div className="mt-3 text-[11px] text-gray-400">
             Joined {formatDateTime(profile.createdAt)}
           </div>
+
+          {isMe && !editing && (
+            <button
+              className="cf-btn mt-3"
+              onClick={() => {
+                setAvatarInput(profile.avatarUrl ?? "");
+                setSaveError(null);
+                setEditing(true);
+              }}
+            >
+              Edit profile
+            </button>
+          )}
+          {isMe && editing && (
+            <div className="mt-3 space-y-2 border-t border-cf-border pt-3 text-left">
+              {saveError && <ErrorBox message={saveError} />}
+              <label className="cf-label">Avatar URL</label>
+              <input
+                className="cf-input"
+                value={avatarInput}
+                onChange={(e) => setAvatarInput(e.target.value)}
+                placeholder="https://…/avatar.png"
+              />
+              <div className="flex gap-2">
+                <button className="cf-btn cf-btn-primary" onClick={saveProfile} disabled={saving}>
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                <button className="cf-btn" onClick={() => setEditing(false)} disabled={saving}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 

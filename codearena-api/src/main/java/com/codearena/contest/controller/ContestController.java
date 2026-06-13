@@ -6,6 +6,7 @@ import com.codearena.contest.dto.ContestDetailResponse;
 import com.codearena.contest.dto.ContestListResponse;
 import com.codearena.contest.dto.StandingsResponse;
 import com.codearena.contest.service.ContestService;
+import com.codearena.contest.service.RatingService;
 import com.codearena.contest.service.StandingsService;
 import com.codearena.submission.dto.SubmissionListResponse;
 import com.codearena.submission.service.SubmissionService;
@@ -28,12 +29,14 @@ public class ContestController {
     private final ContestService contestService;
     private final StandingsService standingsService;
     private final SubmissionService submissionService;
+    private final RatingService ratingService;
 
     public ContestController(ContestService contestService, StandingsService standingsService,
-                             SubmissionService submissionService) {
+                             SubmissionService submissionService, RatingService ratingService) {
         this.contestService = contestService;
         this.standingsService = standingsService;
         this.submissionService = submissionService;
+        this.ratingService = ratingService;
     }
 
     @GetMapping
@@ -85,5 +88,13 @@ public class ContestController {
         Long userId = (Long) authentication.getPrincipal();
         return ResponseEntity.ok(ApiResponse.success(
                 submissionService.getMyContestSubmissions(id, userId, pageable)));
+    }
+
+    @PostMapping("/{id}/rate")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Manually apply ratings for an ended rated contest (ADMIN only)")
+    public ResponseEntity<ApiResponse<String>> rateContest(@PathVariable Long id) {
+        int rated = ratingService.applyRatings(id);
+        return ResponseEntity.ok(ApiResponse.success("Applied ratings to " + rated + " participants"));
     }
 }

@@ -1,5 +1,8 @@
 import { api } from "./api";
 import type {
+  BlogComment,
+  BlogDetail,
+  BlogListItem,
   ContestDetail,
   ContestListItem,
   Page,
@@ -99,6 +102,21 @@ export const contestApi = {
   standings: (id: number) => api.get<Standings>(`/contests/${id}/standings`),
   mySubmissions: (id: number, params: PageParams) =>
     api.get<Page<SubmissionListItem>>(`/contests/${id}/my-submissions`, { ...params }),
+};
+
+// ---- Blogs ----
+export const blogApi = {
+  list: (params: PageParams) =>
+    api.get<Page<BlogListItem>>("/blogs", { ...params }),
+  get: (id: number) => api.get<BlogDetail>(`/blogs/${id}`),
+  create: (body: { title: string; content: string }) =>
+    api.post<BlogDetail>("/blogs", body),
+  update: (id: number, body: { title?: string; content?: string }) =>
+    api.put<BlogDetail>(`/blogs/${id}`, body),
+  vote: (id: number, voteType: "UPVOTE" | "DOWNVOTE") =>
+    api.post<string>(`/blogs/${id}/vote`, { voteType }),
+  addComment: (id: number, content: string, parentId: number | null) =>
+    api.post<BlogComment>(`/blogs/${id}/comments`, { content, parentId }),
 };
 
 // ---- Users ----

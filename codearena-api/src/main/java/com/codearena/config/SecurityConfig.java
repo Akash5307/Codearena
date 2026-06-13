@@ -1,5 +1,6 @@
 package com.codearena.config;
 
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -11,6 +12,8 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+import java.io.IOException;
 
 @Configuration
 @EnableWebSecurity
@@ -50,9 +53,28 @@ public class SecurityConfig {
                         // Everything else requires authentication
                         .anyRequest().authenticated()
                 )
+                // Return a proper 401 for missing/invalid credentials and 403 for
+                // authenticated-but-forbidden, both in the standard ApiResponse envelope
+                // (Spring's default is 403 for both).
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint((req, res, e) ->
+                                writeError(res, HttpServletResponse.SC_UNAUTHORIZED,
+                                        "UNAUTHORIZED", "Authentication required"))
+                        .accessDeniedHandler((req, res, e) ->
+                                writeError(res, HttpServletResponse.SC_FORBIDDEN,
+                                        "ACCESS_DENIED", "Access denied"))
+                )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
+    }
+
+    private static void writeError(HttpServletResponse res, int status, String code, String message)
+            throws IOException {
+        res.setStatus(status);
+        res.setContentType("application/json");
+        res.getWriter().write(
+                "{\"success\":false,\"errorCode\":\"" + code + "\",\"error\":\"" + message + "\"}");
     }
 
     @Bean

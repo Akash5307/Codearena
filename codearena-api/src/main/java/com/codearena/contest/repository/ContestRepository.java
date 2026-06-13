@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -17,6 +18,10 @@ public interface ContestRepository extends JpaRepository<Contest, Long> {
     Optional<Contest> findBySlug(String slug);
 
     boolean existsBySlug(String slug);
+
+    // Rated contests not yet processed by the rating engine (filtered to ENDED in code,
+    // since contest state is computed from the clock, not stored).
+    List<Contest> findByIsRatedTrueAndRatingsAppliedFalse();
 
     // Upcoming: start_time > now
     @Query("SELECT c FROM Contest c WHERE c.startTime > :now ORDER BY c.startTime ASC")
