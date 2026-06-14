@@ -203,3 +203,5 @@ CI runs all of this on push/PR via `.github/workflows/ci.yml` (backend tests, fr
 
 - Verdict/standings updates are poll-based, not pushed (no WebSocket) — a deliberate choice to keep the API stateless
 - No plagiarism detection on submissions
+
+🍻🍻
