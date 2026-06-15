@@ -67,13 +67,13 @@ class SubmissionControllerTest {
     }
 
     @Test
-    void submit_withoutAuth_returns403() throws Exception {
+    void submit_withoutAuth_returns401() throws Exception {
         SubmitRequest request = new SubmitRequest(1L, null, "CPP", "int main() {}");
 
         mockMvc.perform(post("/api/v1/submissions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

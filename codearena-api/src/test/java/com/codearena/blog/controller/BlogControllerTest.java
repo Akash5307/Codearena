@@ -88,13 +88,13 @@ class BlogControllerTest {
     }
 
     @Test
-    void createPost_withoutAuth_returns403() throws Exception {
+    void createPost_withoutAuth_returns401() throws Exception {
         var request = new BlogPostCreateRequest("My Post", "Post content");
 
         mockMvc.perform(post("/api/v1/blogs")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

@@ -43,6 +43,7 @@ class ContestControllerTest {
     @MockBean private ContestService contestService;
     @MockBean private StandingsService standingsService;
     @MockBean private com.codearena.submission.service.SubmissionService submissionService;
+    @MockBean private com.codearena.contest.service.RatingService ratingService;
     @MockBean private JwtUtil jwtUtil;
     @MockBean private RedisTemplate<String, Object> redisTemplate;
 
@@ -141,8 +142,8 @@ class ContestControllerTest {
     }
 
     @Test
-    void registerForContest_withoutAuth_returns403() throws Exception {
+    void registerForContest_withoutAuth_returns401() throws Exception {
         mockMvc.perform(post("/api/v1/contests/1/register"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 }

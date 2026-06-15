@@ -72,7 +72,7 @@ class ProblemControllerTest {
     }
 
     @Test
-    void createProblem_withoutAuth_returns403() throws Exception {
+    void createProblem_withoutAuth_returns401() throws Exception {
         ProblemCreateRequest request = new ProblemCreateRequest(
                 "Title", "Statement", null, null, null, null, null, null
         );
@@ -80,7 +80,7 @@ class ProblemControllerTest {
         mockMvc.perform(post("/api/v1/problems")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
