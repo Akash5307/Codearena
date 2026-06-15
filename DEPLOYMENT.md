@@ -149,7 +149,41 @@ Tests use Mockito and MockMvc — no running infrastructure required.
 
 ## Docker Production Deployment
 
-### Single-Command Deploy
+### Production on a single VPS (TLS + secrets) — recommended
+
+`docker-compose.full.yml` is the **dev/demo** stack (hardcoded secrets, all ports
+exposed, plain HTTP). For a real deployment use **`docker-compose.prod.yml`**,
+which adds: secrets from `.env`, `restart: unless-stopped`, per-container memory
+limits, **no public infra ports** (RabbitMQ/MinIO admin UIs bind to `127.0.0.1`
+for SSH-tunnel access; Postgres/Redis aren't published at all), an API
+healthcheck, and a **Caddy** reverse proxy that auto-provisions a Let's Encrypt
+TLS cert — the only public service (80/443).
+
+```bash
+# 0. DNS: point an A record for your domain at the VPS's public IP.
+
+# 1. Secrets — copy the template and fill in REAL values.
+cp .env.example .env
+#    generate: openssl rand -base64 48   (JWT_SECRET)   /   openssl rand -base64 24 (passwords)
+#    set DOMAIN + ACME_EMAIL to your domain and email.
+
+# 2. Build the Kotlin sandbox image once (host daemon only inspects it locally).
+docker build -t codearena-kotlin:21 codearena-judge/sandbox-images/kotlin
+
+# 3. Launch. Open ONLY 80 + 443 in the VPS firewall (ufw allow 80,443/tcp).
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Then browse `https://<your-domain>` — Caddy obtains the cert on first request.
+Admin UIs via SSH tunnel, e.g. `ssh -L 15672:127.0.0.1:15672 user@vps` then open
+`http://localhost:15672`.
+
+**Before relying on it for real data:**
+- Pin `minio/minio` to a tested `RELEASE.*` tag (it's `:latest` in the file).
+- Set up Postgres backups: `docker exec codearena-postgres pg_dump -U $POSTGRES_USER codearena | gzip > backup.sql.gz` on a cron, shipped off-box.
+- The judge holds the host Docker socket (DooD) — run it on a **dedicated host**; for untrusted public submissions, swap the sandbox backend for gVisor/Kata/Firecracker (the `DockerSandbox` seam).
+
+### Single-Command Deploy (dev / demo)
 
 Deploy the entire stack (infrastructure + API + judge + frontend) with one command:
 

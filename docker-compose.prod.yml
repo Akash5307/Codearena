@@ -1,0 +1,205 @@
+# Production stack for a single VPS. Hardened vs docker-compose.full.yml:
+#  - all secrets come from .env (no literals); see .env.example
+#  - restart: unless-stopped on every service
+#  - infra ports are NOT published; admin UIs bind to 127.0.0.1 only (SSH-tunnel)
+#  - memory limits on every container
+#  - Caddy terminates TLS (auto Let's Encrypt) and is the only public service
+#  - API has a healthcheck so dependents wait and Docker can restart it
+#
+# First-time setup (see DEPLOYMENT.md):
+#   cp .env.example .env && edit it
+#   docker build -t codearena-kotlin:21 codearena-judge/sandbox-images/kotlin
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: codearena-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  redis:
+    image: redis:7-alpine
+    container_name: codearena-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: codearena-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    # Management UI bound to localhost only — reach it via SSH tunnel, not the internet.
+    ports:
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  minio:
+    # Pin to a tested RELEASE.* tag before going live (avoid :latest in prod).
+    image: minio/minio:latest
+    container_name: codearena-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    # Console bound to localhost only — SSH tunnel for admin.
+    ports:
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  codearena-api:
+    build:
+      context: .
+      dockerfile: codearena-api/Dockerfile
+    container_name: codearena-api
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      MINIO_URL: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_EXPIRY_MS: ${JWT_ACCESS_EXPIRY_MS}
+      JWT_REFRESH_EXPIRY_MS: ${JWT_REFRESH_EXPIRY_MS}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+  codearena-judge:
+    build:
+      context: .
+      dockerfile: codearena-judge/Dockerfile
+    container_name: codearena-judge
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      MINIO_URL: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      # Must be the SAME absolute path on host and in the container (host daemon
+      # resolves sandbox bind mounts). See DEPLOYMENT.md (Docker-out-of-Docker).
+      JUDGE_WORK_DIR: /tmp/codearena-judge
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/codearena-judge:/tmp/codearena-judge
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    # NOTE: this limit caps the orchestrator JVM only. Sandbox containers are
+    # siblings on the host daemon, each capped per-run by DockerSandbox.
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+  codearena-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: codearena-frontend
+    restart: unless-stopped
+    # No host port — only Caddy reaches it, over the internal network.
+    depends_on:
+      - codearena-api
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: codearena-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - codearena-frontend
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+volumes:
+  postgres_data:
+  minio_data:
+  caddy_data:
+  caddy_config:

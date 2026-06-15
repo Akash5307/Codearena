@@ -1,0 +1,12 @@
+# Caddy automatically provisions and renews a Let's Encrypt certificate for
+# $DOMAIN and reverse-proxies to the frontend container (which serves the SPA
+# and proxies /api to the API). This is the public entrypoint — the only thing
+# bound to 0.0.0.0:80/443.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip zstd
+	reverse_proxy codearena-frontend:80
+}
